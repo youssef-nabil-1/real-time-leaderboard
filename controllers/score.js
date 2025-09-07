@@ -1,7 +1,8 @@
 import Score from "../models/score.js";
 
 export const createScore = async (req, res, next) => {
-    const { gameId, score, userId } = req.body;
+    const { gameId, score } = req.body;
+    const userId = req.userId;
     try {
         const score = new Score({ gameId, score, userId });
         const result = await score.save();

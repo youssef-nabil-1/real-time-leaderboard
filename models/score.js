@@ -8,7 +8,7 @@ const scoreSchema = new Schema(
             ref: "Game",
             required: true,
         },
-        userId: {
+        user: {
             type: Schema.Types.ObjectId,
             ref: "User",
             required: true,

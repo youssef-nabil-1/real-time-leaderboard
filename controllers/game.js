@@ -28,7 +28,7 @@ export const getGames = async (req, res, next) => {
         res.status(200).json({
             message: "Games fetched",
             games,
-            pagination: { currentPage, totalPages },
+            pagination: { page, totalPages },
         });
     } catch (err) {
         console.log(err);

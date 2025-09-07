@@ -4,6 +4,6 @@ import isAuth from "../middlewares/isAuth.js";
 
 const router = express.Router();
 
-router.post("/", isAuth, scoreController.createScore);
+router.post("/create", isAuth, scoreController.createScore);
 
 export default router;
