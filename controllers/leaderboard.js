@@ -1,4 +1,3 @@
-import { useId } from "react";
 import Score from "../models/score.js";
 
 export const getGlobalLeaderboard = async (req, res, next) => {
@@ -37,7 +36,7 @@ export const getUserRanking = async (req, res) => {
     const userId = req.userId;
 
     try {
-        const totalUserScore = await Score.aggregate([
+        const userTotalScore = await Score.aggregate([
             { $match: { user: userId } },
             {
                 $group: {
