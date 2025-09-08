@@ -1,7 +1,29 @@
 import Score from "../models/score.js";
+import User from "../models/user.js";
+import {
+    getLeaderboard,
+    updateScore,
+    getRanking,
+    getUserScore,
+} from "../redisClient.js";
 
 export const getGlobalLeaderboard = async (req, res, next) => {
     try {
+        const cachedBoard = await getGlobalLeaderboard();
+
+        if (cachedBoard) {
+            const populatedBoard = await Promise.all(
+                cachedBoard.map(async (entry) => {
+                    const user = await User.findById(entry.user);
+                    return { ...entry, user };
+                })
+            );
+            return res.status(200).json({
+                message: "Global Leaderboard fetched from cache",
+                leaderboard: populatedBoard,
+            });
+        }
+
         const scores = await Score.aggregate([
             {
                 $group: {
@@ -22,6 +44,12 @@ export const getGlobalLeaderboard = async (req, res, next) => {
             { $unwind: "$user" },
         ]);
 
+        await Promise.all(
+            scores.map((score) =>
+                updateGlobalScore(score._id.toString(), score.totalScore)
+            )
+        );
+
         res.status(200).json({
             message: "Global Leaderboard fetched",
             leaderboard: scores,
@@ -36,6 +64,17 @@ export const getUserRanking = async (req, res) => {
     const userId = req.userId;
 
     try {
+        const cachedRanking = await getGlobalUserRanking(userId);
+
+        if (cachedRanking.rank !== null) {
+            return res.status(200).json({
+                message: "Global rank fetched from cache",
+                rank: cachedRanking.rank,
+                totalPlayers: cachedRanking.total,
+                totalScore: cachedRanking.score,
+            });
+        }
+
         const userTotalScore = await Score.aggregate([
             { $match: { user: userId } },
             {
@@ -52,26 +91,15 @@ export const getUserRanking = async (req, res) => {
                 .json({ message: "No scores found for this user" });
         }
 
-        const allUserScores = await Score.aggregate([
-            {
-                $group: {
-                    _id: "$user",
-                    totalScore: { $sum: "$score" },
-                },
-            },
-            { $sort: { totalScore: -1 } },
-        ]);
+        await updateGlobalScore(userId, userTotalScore[0].totalScores);
 
-        const userRank =
-            allUserScores.findIndex(
-                (score) => score._id.toSring() === userId.toSring()
-            ) + 1;
+        const updatedRanking = await getGlobalUserRanking(userId);
 
         res.status(200).json({
             message: "Global rank fetched",
-            rank: userRank,
-            totalPlayers: allUserScores.length,
-            totalScore: userTotalScore[0].totalScore,
+            rank: updatedRanking.rank,
+            totalPlayers: updatedRanking.total,
+            totalScore: updatedRanking.score,
         });
     } catch (err) {
         console.log(err);
@@ -84,6 +112,18 @@ export const getUserGameRank = async (req, res) => {
     const userId = req.userId;
 
     try {
+        const key = `leaderboard:game:${gameId}`;
+
+        const cachedRank = await getRanking(key);
+        const cachedScore = await getUserScore(key, userId);
+
+        if (cachedRank) {
+            return res.status(200).json({
+                message: "User game rank fetched",
+                rank: cachedRank + 1,
+                userScore: cachedScore,
+            });
+        }
         const userScore = await Score.findOne({ gameId, user: userId }).sort({
             score: -1,
         });
@@ -99,12 +139,11 @@ export const getUserGameRank = async (req, res) => {
             score: { $gt: userScore.score },
         });
 
-        const totalPlayers = await Score.distinct("user", { gameId }).length;
+        await updateScore(key, { score: userScore, value: userId });
 
         res.status(200).json({
             message: "User game rank fetched",
             rank: rank + 1,
-            totalPlayers,
             userScore: userScore.score,
         });
     } catch (err) {
@@ -115,24 +154,35 @@ export const getUserGameRank = async (req, res) => {
 
 export const getGameLeaderboard = async (req, res) => {
     const { gameId } = req.params;
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    const skip = (page - 1) * limit;
 
     try {
+        const cachedBoard = await getLeaderboard(gameId);
+
+        if (cachedBoard) {
+            const populatedBoard = await Promise.all(
+                cachedBoard.map(async (cache) => {
+                    const user = await User.findById(cache.user);
+                    return { ...cache, user };
+                })
+            );
+            return res.status(200).json({
+                message: "Game Leaderboard fetched",
+                leaderboard: populatedBoard,
+            });
+        }
         const scores = await Score.find({ gameId })
             .sort({ score: -1 })
             .populate("user")
-            .skip(skip)
-            .limit(limit);
+            .limit(10);
 
-        const total = await Score.countDocuments({ gameId });
-        const totalPages = Math.ceil(total / limit);
+        scores.forEach(async (score) => {
+            const key = `leaderboard:game:${gameId}`;
+            await updateScore(key, score.score, score.user);
+        });
 
         res.status(200).json({
             message: "Game Leaderboard fetched",
             leaderboard: scores,
-            pagination: { page, totalPages, total },
         });
     } catch (err) {
         console.log(err);
@@ -142,10 +192,26 @@ export const getGameLeaderboard = async (req, res) => {
 
 export const getDailyLeaderboard = async (req, res) => {
     const { gameId } = req.params;
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
 
     try {
+        const cachedBoard = await getDailyLeaderboard(gameId);
+
+        if (cachedBoard) {
+            const populatedBoard = await Promise.all(
+                cachedBoard.map(async (entry) => {
+                    const user = await User.findById(entry.user);
+                    return { ...entry, user };
+                })
+            );
+            return res.status(200).json({
+                message: "Daily leaderboard fetched from cache",
+                leaderboard: populatedBoard,
+            });
+        }
+
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
         const scores = await Score.find({
             gameId,
             createdAt: { $gte: today },
@@ -153,6 +219,12 @@ export const getDailyLeaderboard = async (req, res) => {
             .sort({ score: -1 })
             .populate("user")
             .limit(10);
+
+        await Promise.all(
+            scores.map((score) =>
+                updateDailyScore(gameId, score.score, score.user._id.toString())
+            )
+        );
 
         res.status(200).json({
             message: "Daily leaderboard fetched",
